@@ -2,342 +2,288 @@
 from __future__ import unicode_literals
 
 import os
-# from pymongo import MongoClient
 from datetime import date
-
-# ref: http://twstock.readthedocs.io/zh_TW/latest/quickstart.html#id2
 import requests
 import twstock
 import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
-
 import PIL.Image
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import NoSuchElementException
-import time
-
 from imgurpython import ImgurClient
 
 from flask import Flask, request, abort
-from linebot import (
-    LineBotApi, WebhookParser, WebhookHandler
-)
-from linebot.exceptions import (
-    InvalidSignatureError
-)
+from linebot import LineBotApi, WebhookParser
+from linebot.exceptions import InvalidSignatureError
 from linebot.models import *
 
-matplotlib.use('Agg')  # ref: https://matplotlib.org/faq/howto_faq.html
+matplotlib.use('Agg')
 
 app = Flask(__name__)
 
-# Channel access token
-line_bot_api = LineBotApi(
-    'kK3nS0J1mu0oDHuFs+W+CFjYLYhDmKOxK2tIaE4YdN7lw4lzhhEEuSqNUvjXimGjc+QW20XzcU+Xy8OID2CLN1AmpnkF6'
-    '+wIgTN2DokyzpodhyYVMgAK/i2BGvxH+u+iS/hWBqeLIbqBGLzseGdY0QdB04t89/1O/w1cDnyilFU=')
-# Channel secret
-parser = WebhookParser('77fdb87ee576fcbee74ebebb7c4d416b')
+# -----------------------------------------
+# 讀取 Render Environment Variables
+# -----------------------------------------
+line_bot_api = LineBotApi(os.getenv("Iz3erdDFz0nY3ykXJKCk2Z0Zd2Ues8vw3IGjYCrOwzyIo7yi2zHVM9COOXrQN7zojwupR/DHgXmE8u1hGwUHohcGZqwItOsNrOg8bNkGuHjnACM1+d05wOMBvXahPgisKLGusyeNU4sWslXJALehHgdB04t89/1O/w1cDnyilFU="))
+parser = WebhookParser(os.getenv("a5e39152eb84b873667aac9b2d076ba0"))
 
 
-# 用 Beautiful Soup 解析 Goodinfo HTML程式碼
+# --------------------------------------------------
+# BeautifulSoup 抓 Goodinfo
+# --------------------------------------------------
 def soup(url):
     headers = {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
-                      'Chrome/65.0.3325.181 Safari/537.36',
+        "user-agent": "Mozilla/5.0"
     }
     resp = requests.get(url, headers=headers)
     resp.encoding = 'utf-8'
-    # 根據 HTTP header 的編碼解碼後的內容資料（ex. UTF-8）
-    raw_html = resp.text
-
-    return BeautifulSoup(raw_html, 'html.parser')
+    return BeautifulSoup(resp.text, 'html.parser')
 
 
-# 把 List convert 成 dict
 def convert(lst):
-    res_dct = {lst[i]: lst[i + 1] for i in range(0, len(lst) - 1, 2)}
-    return res_dct
+    return {lst[i]: lst[i + 1] for i in range(0, len(lst) - 1, 2)}
 
 
-# 上傳圖檔至imgur並將圖片網址打包成一個訊息
 def upload_image(fn):
-    # -- upload
-    # imgur with account: your.mail@gmail.com
     client_id = '219e4677b4d2110'
     client_secret = '69f161c63fe23108f9f77498f72dd3c50c7adedd'
 
     client = ImgurClient(client_id, client_secret)
-    print("Uploading image... ")
     image = client.upload_from_path(fn, anon=True)
-    print("Done")
-
     url = image['link']
-    image_message = ImageSendMessage(
+
+    return ImageSendMessage(
         original_content_url=url,
         preview_image_url=url
     )
 
-    return image_message
 
-
-# 在Goodinfo網站爬取公司基本資訊
+# --------------------------------------------------
+# 1. Goodinfo 基本資料
+# --------------------------------------------------
 def crawl_for_stock_fundamental(event, stock_id):
-    content = ''
-    found_soup = soup('https://goodinfo.tw/StockInfo/StockDetail.asp?STOCK_ID=' + str(stock_id))
+    content = ""
+    found_soup = soup("https://goodinfo.tw/StockInfo/StockDetail.asp?STOCK_ID=" + str(stock_id))
 
-    # 股票代碼 + 公司名稱
     company_name = found_soup.find("title").get_text().split()
 
-    # 公司資訊
     basic_info_tables = found_soup.find_all("table", {"class": "b1 p4_4 r10"})
     if not basic_info_tables:
-        content = "非常抱歉，目前暫無此股號相關基本資訊！"
-        send_text_message(event, content)
-        return
+        return None
 
-    for basic_info_table in basic_info_tables:
-        # print(basic_info_table)
-        if "產業別" in basic_info_table.get_text():
-            raw_info = basic_info_table.find_all('td')
+    for t in basic_info_tables:
+        if "產業別" in t.get_text():
+            raw_info = t.find_all("td")
 
     info = []
     for i in raw_info[1:]:
-        info.append(str(i.get_text()).replace("\xa0", " "))
+        info.append(i.get_text().replace("\xa0", " "))
     info = convert(info)
 
     today = date.today()
 
-    # 將所需資訊及Title等放入List
-    content += '《公司基本資訊》\n'
-    content += '%s %s\n' % (
-        company_name[0],
-        today)
-    content += '公司名稱: %s\n' % (
-        info['名稱'])
-    content += '產業別: %s\n' % (
-        info['產業別'])
-    content += '面值: %s\n' % (
-        info['面值'])
-    content += '資本額: %s / 市值: %s' % (
-        info['資本額'],
-        info['市值'])
+    content += f"《公司基本資訊》\n{company_name[0]} {today}\n"
+    content += f"公司名稱: {info['名稱']}\n"
+    content += f"產業別: {info['產業別']}\n"
+    content += f"面值: {info['面值']}\n"
+    content += f"資本額: {info['資本額']} / 市值: {info['市值']}"
 
     return content
 
 
-# 依殖利率>價格排序
-def DY_sort(stock):
-    stock = stock.split()
-    DY = float(stock[3][:-1])
-    price = 1 / float(stock[2])
-    return DY, price
+# --------------------------------------------------
+# 2. TradingView 基本面（無 Selenium 版本）
+# --------------------------------------------------
+def tradingview_fundamental(stock_id):
+    """
+    TradingView 有一個隱藏 API 可以抓基本面資料：
+    https://scanner.tradingview.com/taiwan/scan
+    """
+
+    url = "https://scanner.tradingview.com/taiwan/scan"
+
+    payload = {
+        "symbols": {
+            "tickers": [f"TWSE:{stock_id}"],
+            "query": {"types": []}
+        },
+        "columns": [
+            "name",
+            "close",
+            "Recommend.All",
+            "market_cap_basic",
+            "price_earnings_ttm",
+            "dividend_yield_recent"
+        ]
+    }
+
+    headers = {"Content-Type": "application/json"}
+
+    r = requests.post(url, json=payload, headers=headers)
+
+    if r.status_code != 200:
+        return None
+
+    data = r.json()
+
+    if "data" not in data or len(data["data"]) == 0:
+        return None
+
+    d = data["data"][0]["d"]
+
+    name, close, rec, cap, pe, dy = d
+
+    content = f"《TradingView 基本面》\n"
+    content += f"名稱：{name}\n"
+    content += f"收盤：{close}\n"
+    content += f"評等：{rec}\n"
+    content += f"市值：{cap}\n"
+    content += f"P/E：{pe}\n"
+    content += f"殖利率：{dy}"
+
+    return content
 
 
+# --------------------------------------------------
+# 3. 即時股價
+# --------------------------------------------------
 def p_success(stock_rt, text):
-    content = ''
-    my_datetime = date.fromtimestamp(stock_rt['timestamp'] + 8 * 60 * 60)
-    my_time = my_datetime.strftime('%H:%M:%S')
+    content = ""
+    my_datetime = date.fromtimestamp(stock_rt["timestamp"] + 8 * 3600)
+    my_time = my_datetime.strftime("%H:%M:%S")
 
-    content += '%s (%s) %s\n' % (
-        stock_rt['info']['name'],
-        stock_rt['info']['code'],
-        my_time)
-    content += '現價: %s / 開盤: %s\n' % (
-        stock_rt['realtime']['latest_trade_price'],
-        stock_rt['realtime']['open'])
-    content += '最高: %s / 最低: %s\n' % (
-        stock_rt['realtime']['high'],
-        stock_rt['realtime']['low'])
-    content += '量: %s\n' % (stock_rt['realtime']['accumulate_trade_volume'])
+    content += f"{stock_rt['info']['name']} ({stock_rt['info']['code']}) {my_time}\n"
+    content += f"現價: {stock_rt['realtime']['latest_trade_price']} / 開盤: {stock_rt['realtime']['open']}\n"
+    content += f"最高: {stock_rt['realtime']['high']} / 最低: {stock_rt['realtime']['low']}\n"
+    content += f"量: {stock_rt['realtime']['accumulate_trade_volume']}\n-----\n最近五日價格:\n"
 
-    stock = twstock.Stock(text)  # twstock.Stock('2330')
-    content += '-----\n'
-    content += '最近五日價格: \n'
+    stock = twstock.Stock(text)
     price5 = stock.price[-5:][::-1]
     date5 = stock.date[-5:][::-1]
-    for i in range(len(price5)):
-        if i == len(price5) - 1:
-            content += '[%s] %s' % (date5[i].strftime("%Y-%m-%d"), price5[i])
-        else:
-            content += '[%s] %s\n' % (date5[i].strftime("%Y-%m-%d"), price5[i])
+
+    for i in range(5):
+        content += f"[{date5[i].strftime('%Y-%m-%d')}] {price5[i]}"
+        if i < 4:
+            content += "\n"
 
     return content
 
 
+# --------------------------------------------------
+# 4. K 線圖
+# --------------------------------------------------
 def k_success(text, stock, event):
-    fn = 'K_%s.png' % text
-    my_data = {'close': stock.close, 'date': stock.date, 'open': stock.open}
-    df1 = pd.DataFrame.from_dict(my_data)
+    fn = f"K_{text}.png"
+    df = pd.DataFrame({"date": stock.date, "close": stock.close})
 
-    df1.plot(x='date', y='close')
-    plt.title('[%s]' % stock.sid)
+    df.plot(x="date", y="close")
+    plt.title(f"[{stock.sid}]")
     plt.savefig(fn)
     plt.close()
 
     image_message = upload_image(fn)
-    line_bot_api.reply_message(
-        event.reply_token,
-        image_message
-    )
+    line_bot_api.reply_message(event.reply_token, image_message)
 
 
-def f_success(text, event):
-    fn = 'F_%s.png' % text
-
-    # 查詢公司基本資訊
-    content = crawl_for_stock_fundamental(event, text)
-    if not content:
-        content = "請輸入有效股號或再試一次！"
-        send_text_message(event, content)
-    else:
-        reply_lst = [TextSendMessage(text=content)]
-        # 爬取tradingview網站的基本面資訊並將頁面截圖
-        chrome_options = Options()
-        windows_size = "1920,750"
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument("--window-size=%s" % windows_size)
-        chrome_options.add_argument("--hide-scrollbars")
-        chrome_options.binary_location = os.environ.get("GOOGLE_CHROME_BIN")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--no-sandbox")
-        driver = webdriver.Chrome(executable_path=os.environ.get("CHROMEDRIVER_PATH"),
-                                  chrome_options=chrome_options)
-        driver.maximize_window()
-        driver.get('https://tw.tradingview.com/symbols/TWSE-' + str(text))
-        time.sleep(2)
-        driver.find_element_by_class_name("text-oST7Udg3").click()
-        try:
-            ele = driver.find_element("xpath", '//div[@class="tv-feed-widget tv-feed-widget--fundamentals"]')
-        except NoSuchElementException:
-            content = "非常抱歉，目前暫無此股號相關資訊！"
-            send_text_message(event, content)
-            exit(0)
-
-        start_height = ele.location["y"] - 10
-        js = "scrollTo(0,%s)" % start_height
-        driver.execute_script(js)  # 執行js
-        time.sleep(0.5)
-        driver.save_screenshot(fn)
-
-        # 將基本面圖表從整頁截圖中切割
-        img = PIL.Image.open(fp=fn)
-        left = ele.location['x']
-        # top = ele.location['y']
-        right = ele.location['x'] + ele.size['width']
-        # bottom = ele.location['y'] + ele.size['height']
-        img = img.crop((left, 58, right, 730))
-        img.save(fn)
-
-        image_message = upload_image(fn)
-        reply_lst.append(image_message)
-        line_bot_api.reply_message(
-            event.reply_token,
-            reply_lst
-        )
-
-        driver.close()
+# --------------------------------------------------
+# 5. 殖利率推薦
+# --------------------------------------------------
+def DY_sort(stock):
+    s = stock.split()
+    DY = float(s[3][:-1])
+    price = 1 / float(s[2])
+    return DY, price
 
 
-# 爬殖利率
 def d_success(text):
-    content = ''
+    content = ""
     text = text.split()
     budget = float(text[0]) / 1000
     desire_DY = float(text[1])
-    url = 'https://stock.wespai.com/rate110'
-    soup_found = soup(url)
-    target = soup_found.find("table", "display")
-    trs = target.tbody.find_all("tr")
-    DY_lst = []
 
+    url = "https://stock.wespai.com/rate110"
+    s = soup(url)
+    trs = s.find("table", "display").tbody.find_all("tr")
+
+    lst = []
     for tr in trs:
-        tds = tr.find_all("td")
-        numbers = tds[0].text
-        names = tds[1].text
-        prices = tds[6].text
-        DY = tds[8].text
-        if budget >= float(prices) and desire_DY <= float(DY[:-1]):
-            DY_lst.append(f"{numbers} {names} {prices} {DY}")
-    DY_sorted = sorted(DY_lst, reverse=True, key=DY_sort)
-    if len(DY_sorted) >= 5:
-        content = "\n".join(DY_sorted[:5])
-    elif 5 > len(DY_sorted) >= 1:
-        content = "\n".join(DY_sorted)
-    elif not DY_sorted:
-        content = "沒有合適的標的"
-    return content
+        t = tr.find_all("td")
+        num = t[0].text
+        name = t[1].text
+        price = t[6].text
+        DY = t[8].text
+        if budget >= float(price) and desire_DY <= float(DY[:-1]):
+            lst.append(f"{num} {name} {price} {DY}")
+
+    lst = sorted(lst, reverse=True, key=DY_sort)
+
+    if len(lst) >= 5:
+        return "\n".join(lst[:5])
+    elif len(lst) >= 1:
+        return "\n".join(lst)
+    else:
+        return "沒有合適的標的"
 
 
+# --------------------------------------------------
+# 回覆文字
+# --------------------------------------------------
 def send_text_message(event, content):
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=content)
-    )
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=content))
 
 
-@app.route("/callback", methods=['POST'])
+# --------------------------------------------------
+# LINE Webhook
+# --------------------------------------------------
+@app.route("/callback", methods=["POST"])
 def callback():
-    # get X-Line-Signature header value
-    signature = request.headers['X-Line-Signature']
-
-    # get request body as text
+    signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
-    app.logger.info("Request body: " + body)
 
-    # handle webhook body
     try:
-        eve = parser.parse(body, signature)
+        events = parser.parse(body, signature)
     except InvalidSignatureError:
-        print("Invalid signature. Please check your channel access token/channel secret.")
         abort(400)
 
-    for event in eve:
+    for event in events:
         if isinstance(event, MessageEvent):
             text = event.message.text
-            # 查詢即時股價
-            if text.startswith('P'):
-                text = text[1:]
-                try:
-                    stock_rt = twstock.realtime.get(text)
-                    content = p_success(stock_rt, text)
-                except KeyError:
-                    content = "請輸入有效股號或再試一次！"
 
+            if text.startswith("P"):
+                t = text[1:]
+                try:
+                    stock_rt = twstock.realtime.get(t)
+                    content = p_success(stock_rt, t)
+                except:
+                    content = "請輸入有效股號！"
                 send_text_message(event, content)
 
-            # 查詢歷史股價圖表
-            elif text.startswith('K'):
-                text = text[1:]
+            elif text.startswith("K"):
+                t = text[1:]
                 try:
-                    stock = twstock.Stock(text)
-                    k_success(text, stock, event)
-                except KeyError:
-                    content = "請輸入有效股號或再試一次！"
-                    send_text_message(event, content)
+                    stock = twstock.Stock(t)
+                    k_success(t, stock, event)
+                except:
+                    send_text_message(event, "請輸入有效股號！")
 
-            # 查詢公司基本資訊及基本面
-            elif text.startswith('F'):
-                text = text[1:]
-                try:
-                    twstock.Stock(text)
-                    f_success(text, event)
-                except KeyError:
-                    content = "請輸入有效股號或再試一次！"
-                    send_text_message(event, content)
-            # 查詢殖利率推薦標的
-            elif text.startswith('D'):
-                text = text[1:]
-                content = d_success(text)
-                send_text_message(event, content)
-            # 輸入無效指令的回應
-            elif text != "幫助":
-                content = "請輸入有效指令或輸入\"幫助\"來查看所有功能。"
-                send_text_message(event, content)
+            elif text.startswith("F"):
+                t = text[1:]
+                basic = crawl_for_stock_fundamental(event, t)
+                tv = tradingview_fundamental(t)
 
-    return 'OK'
+                if not basic:
+                    send_text_message(event, "查不到基本資料")
+                else:
+                    msg = basic + "\n\n" + (tv if tv else "無 TradingView 基本面資料")
+                    send_text_message(event, msg)
+
+            elif text.startswith("D"):
+                send_text_message(event, d_success(text[1:]))
+
+            else:
+                send_text_message(event, "請輸入有效指令（P/K/F/D）。")
+
+    return "OK"
 
 
 if __name__ == "__main__":
