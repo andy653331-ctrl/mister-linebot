@@ -15,8 +15,9 @@ app = Flask(__name__)
 # -----------------------------------------
 # 讀取 Render Environment Variables
 # -----------------------------------------
-line_bot_api = LineBotApi(os.getenv("Iz3erdDFz0nY3ykXJKCk2Z0Zd2Ues8vw3IGjYCrOwzyIo7yi2zHVM9COOXrQN7zojwupR/DHgXmE8u1hGwUHohcGZqwItOsNrOg8bNkGuHjnACM1+d05wOMBvXahPgisKLGusyeNU4sWslXJALehHgdB04t89/1O/w1cDnyilFU="))
-parser = WebhookParser(os.getenv("a5e39152eb84b873667aac9b2d076ba0"))
+line_bot_api = LineBotApi(os.getenv("CHANNEL_ACCESS_TOKEN"))
+parser = WebhookParser(os.getenv("CHANNEL_SECRET"))
+
 
 
 # --------------------------------------------------
