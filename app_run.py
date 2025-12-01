@@ -1,5 +1,3 @@
-import os
-import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -7,92 +5,127 @@ from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
     FlexSendMessage, QuickReply, QuickReplyButton, MessageAction
 )
+import requests
+import os
+import twstock
 
-app = Flask(__name__)
-
-# ==== LINE KEY ====
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+# ---------------------------
+# 🔐 讀取環境變數（Render 設定）
+# ---------------------------
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# ==== OPENROUTER KEY ====
-OPENROUTER_KEY = os.getenv("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")
-OPENROUTER_MODEL = "openai/gpt-4.1-mini"
+app = Flask(__name__)
 
-# ==== 使用者追蹤清單 ====
-user_watchlist = {}  # {user_id: [2330, 2603]}
-
-
-# ============ ChatGPT（OpenRouter） ============
-def ask_chatgpt(prompt):
-    url = "https://openrouter.ai/api/v1/chat/completions"
+# ---------------------------
+# 🧠 GPT 回應（使用 OpenRouter）
+# ---------------------------
+def ask_gpt(user_text):
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
+
     data = {
-        "model": OPENROUTER_MODEL,
+        "model": "openrouter/openai/gpt-4.1-mini",
         "messages": [
-            {"role": "system", "content": "你是智能 AI 股票助理"},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": user_text}
         ]
     }
-    r = requests.post(url, headers=headers, json=data)
-    res = r.json()
+
     try:
-        return res["choices"][0]["message"]["content"]
-    except:
-        return "⚠ AI 回答發生錯誤，請稍後再試"
+        res = requests.post("https://openrouter.ai/api/v1/chat/completions",
+                            json=data, headers=headers, timeout=10)
+        answer = res.json()["choices"][0]["message"]["content"]
+        return answer
+    except Exception as e:
+        return f"❌ GPT 回應錯誤：{str(e)}"
 
 
-# ============ 查詢台股價格 ============
+# ---------------------------
+# 📈 查台股即時股價
+# ---------------------------
 def get_stock_price(stock_id):
     try:
-        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
-        res = requests.get(url).json()
-        data = res["msgArray"][0]
-        return f"📈 {data['n']}（{stock_id}）\n成交價：{data['z']}\n昨收：{data['y']}\n開盤：{data['o']}"
+        stock = twstock.realtime.get(stock_id)
+        if stock["success"]:
+            price = stock["realtime"]["latest_trade_price"]
+            return f"📈 {stock_id} 即時股價：{price}"
+        else:
+            return "查詢失敗，可能是無效的股票代號。"
     except:
-        return "❌ 查詢失敗，請確認股票代號是否正確"
+        return "無法取得股價，請確認代號是否正確。"
 
 
-# ============ 查詢新聞（Google News） ============
-def get_stock_news(stock_id):
-    url = f"https://news.google.com/rss/search?q={stock_id}+股票&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    import feedparser
-    feed = feedparser.parse(url)
-
-    if len(feed.entries) == 0:
-        return "沒有找到相關新聞"
-
-    msg = f"📰 {stock_id} 最新新聞：\n\n"
-    for e in feed.entries[:5]:
-        msg += f"• {e.title}\n{e.link}\n\n"
-
-    return msg
-
-
-# ============ 主選單 ============
-def main_menu():
-    return TextSendMessage(
-        text="請選擇功能：",
-        quick_reply=QuickReply(
-            items=[
-                QuickReplyButton(action=MessageAction(label="AI 分析", text="AI分析")),
-                QuickReplyButton(action=MessageAction(label="追蹤清單", text="追蹤清單")),
-                QuickReplyButton(action=MessageAction(label="股票新聞", text="股票新聞")),
-                QuickReplyButton(action=MessageAction(label="查詢股價", text="查股價")),
-            ]
-        )
+# ---------------------------
+# 🟦 Flex 主選單
+# ---------------------------
+def menu_flex():
+    return FlexSendMessage(
+        alt_text="主選單",
+        contents={
+            "type": "bubble",
+            "hero": {
+                "type": "image",
+                "url": "https://i.imgur.com/abgEPBL.png",
+                "size": "full",
+                "aspectRatio": "20:13",
+                "aspectMode": "cover"
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "md",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "選擇功能",
+                        "weight": "bold",
+                        "size": "xl"
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "message",
+                            "label": "🤖 AI 分析",
+                            "text": "AI分析"
+                        },
+                        "style": "primary"
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "message",
+                            "label": "📂 追蹤清單",
+                            "text": "追蹤清單"
+                        },
+                        "style": "primary"
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "message",
+                            "label": "📰 股票新聞",
+                            "text": "股票新聞"
+                        },
+                        "style": "primary"
+                    }
+                ]
+            }
+        }
     )
 
 
-# ============ LINE Webhook ============
-@app.route("/callback", methods=["POST"])
+# ---------------------------
+# ✔ LINE Webhook（不能有任何慢操作）
+# ---------------------------
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
 
     try:
@@ -103,65 +136,70 @@ def callback():
     return "OK"
 
 
-# ============ 處理訊息 ============
+# ---------------------------
+# 🎯 文字訊息處理
+# ---------------------------
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_id = event.source.user_id
-    msg = event.message.text.strip()
+    text = event.message.text.strip()
 
+    # ---------------------------
     # 主選單
-    if msg in ["hi", "你好", "選單", "menu"]:
-        line_bot_api.reply_message(event.reply_token, main_menu())
+    # ---------------------------
+    if text in ["menu", "選單", "功能"]:
+        line_bot_api.reply_message(event.reply_token, menu_flex())
         return
 
-    # AI 分析
-    if msg.startswith("AI分析"):
-        reply = ask_chatgpt("請用專業方式分析股票市場：" + msg.replace("AI分析", ""))
+    # ---------------------------
+    # 指令：AI 分析
+    # ---------------------------
+    if text == "AI分析":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(
+            "請輸入你要分析的內容，例如：\n\n➡ 幫我分析台積電（2330）後市如何？"
+        ))
+        return
+
+    # ---------------------------
+    # 指令：查股價
+    # 若輸入為純數字 → 判定為股票代號
+    # ---------------------------
+    if text.isdigit():
+        reply = get_stock_price(text)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
         return
 
-    # 查股價
-    if msg.startswith("查股價"):
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("請輸入股票代號"))
+    # ---------------------------
+    # 指令：股票新聞（示範版）
+    # ---------------------------
+    if text == "股票新聞":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(
+            "📰 最新股票新聞功能開發中…"
+        ))
         return
 
-    if msg.isdigit() and len(msg) <= 5:
-        reply = get_stock_price(msg)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
+    # ---------------------------
+    # 指令：追蹤清單（示範版）
+    # ---------------------------
+    if text == "追蹤清單":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(
+            "📂 追蹤清單功能開發中…"
+        ))
         return
 
-    # 追蹤清單
-    if msg == "追蹤清單":
-        lst = user_watchlist.get(user_id, [])
-        if lst == []:
-            reply = "你的追蹤清單是空的"
-        else:
-            reply = "📌你的追蹤清單：\n" + "\n".join(lst)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
-        return
+    # ---------------------------
+    # 🧠 其他文字 → 送 GPT
+    # ---------------------------
+    reply = ask_gpt(text)
 
-    if msg.startswith("加入 "):
-        stock_id = msg.replace("加入 ", "")
-        user_watchlist.setdefault(user_id, []).append(stock_id)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(f"已加入：{stock_id}"))
-        return
-
-    # 股票新聞
-    if msg.startswith("股票新聞"):
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("請輸入股票代號"))
-        return
-
-    if msg.startswith("news "):
-        stock_id = msg.replace("news ", "")
-        reply = get_stock_news(stock_id)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
-        return
-
-    # 不知道的指令 → 交給 ChatGPT
-    reply = ask_chatgpt(msg)
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(reply)
+    )
 
 
-# ============ Render 啟動 ============
+# ---------------------------
+# 🚀 主程式
+# ---------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
