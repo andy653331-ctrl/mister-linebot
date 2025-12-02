@@ -26,19 +26,35 @@ def ask_gpt(question):
     }
 
     payload = {
-        "model": "openai/gpt-4.1-mini",
+        "model": "openai/gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": "你是股票小幫手，可提供即時股價、基本面說明、新聞摘要。"},
+            {"role": "system", "content": "你是股票小幫手，可提供分析、新聞與趨勢。"},
             {"role": "user", "content": question}
         ]
     }
 
     try:
-        r = requests.post(url, json=payload, headers=headers)
+        r = requests.post(url, json=payload, headers=headers, timeout=20)
         data = r.json()
-        return data["choices"][0]["message"]["content"]
+
+        # === 1. OpenRouter 回傳錯誤格式 ===
+        if "error" in data:
+            return f"❌ GPT API 錯誤：{data['error'].get('message', '未知錯誤')}"
+
+        # === 2. choices 格式：message.content（OpenAI 格式） ===
+        if "choices" in data:
+            choice = data["choices"][0]
+            # 有些模型用 message，有些用 messages
+            if "message" in choice:
+                return choice["message"]["content"]
+            if "messages" in choice:
+                return choice["messages"][0]["content"]
+
+        # === 3. 無法解析（保底）===
+        return "❌ GPT 回應格式無法解析，請稍後再試。"
+
     except Exception as e:
-        return f"❌ GPT 錯誤：{str(e)}"
+        return f"❌ GPT 程式錯誤：{str(e)}"
 
 
 # ===== 即時股價 =====
