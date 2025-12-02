@@ -1,73 +1,56 @@
+import os
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import requests
-import os
+import twstock
 
 app = Flask(__name__)
 
-# --- LINE TOKEN ---
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
-OPENROUTER_API_KEY = os.getenv("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")
+# === Read environment variables ===
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
-
-# ============================
-# 🔹 1. 即時台股股價（Yahoo Finance API）
-# ============================
-def get_stock_price(stock_id):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_id}.TW"
-
-    try:
-        res = requests.get(url, timeout=10).json()
-
-        result = res["chart"]["result"][0]
-        meta = result["meta"]
-        current_price = meta["regularMarketPrice"]
-
-        return f"📈 {stock_id} 即時股價\n最新成交價：{current_price}"
-
-    except Exception:
-        return "無法取得股價，請確認代號是否正確（例如：2330、2603）。"
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
 
-# ============================
-# 🔹 2. GPT + 上網查詢（Perplexity）
-# ============================
-def ask_gpt(query):
+# ===== GPT（OpenRouter） =====
+def ask_gpt(question):
     url = "https://openrouter.ai/api/v1/chat/completions"
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
-
-    data = {
-        "model": "perplexity/sonar",
+    payload = {
+        "model": "openai/gpt-4.1-mini",
         "messages": [
-            {"role": "user", "content": query}
+            {"role": "system", "content": "你是一個股票小幫手，會分析股票、查詢新聞、提供投資知識。"},
+            {"role": "user", "content": question}
         ]
     }
 
     try:
-        res = requests.post(url, headers=headers, json=data, timeout=20).json()
-
-        if "choices" not in res:
-            return f"❌ GPT 錯誤：{res}"
-
-        return res["choices"][0]["message"]["content"]
-
+        response = requests.post(url, json=payload, headers=headers)
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"❌ GPT 回應錯誤：{str(e)}"
+        return f"❌ GPT 錯誤：{str(e)}"
 
 
-# ============================
-# 🔹 3. LINE Webhook
-# ============================
+# ===== 股票最新價格 =====
+def get_stock_price(stock_id):
+    try:
+        stock = twstock.realtime.get(stock_id)
+        if stock["success"]:
+            return float(stock["realtime"]["latest_trade_price"])
+        return None
+    except:
+        return None
+
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
@@ -81,27 +64,30 @@ def callback():
     return "OK"
 
 
-# ============================
-# 🔹 4. 訊息處理邏輯
-# ============================
-@handler.add(MessageEvent, message=TextMessage)
+@handler.add(MessageEvent, MessageType=TextMessage)
 def handle_message(event):
-    text = event.message.text.strip()
 
-    # 若使用者輸入股票代號（全數字）
-    if text.isdigit():
-        reply = get_stock_price(text)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
+    user_text = event.message.text.strip()
+
+    # === 如果是純數字 → 查股價 ===
+    if user_text.isnumeric():
+        price = get_stock_price(user_text)
+        if price:
+            reply = f"📈 股票 {user_text} 最新股價：{price}"
+        else:
+            reply = "無法取得股價，請確認代號是否正確（例如：2330，2603）"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
-    # 其他文字丟給 GPT
-    answer = ask_gpt(text)
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(answer))
+    # === 其他 → GPT 回答 ===
+    answer = ask_gpt(user_text)
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
 
 
-# ============================
-# 🔹 5. 啟動服務（Render 用）
-# ============================
+@app.route("/")
+def home():
+    return "Linebot Running"
+
+
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
