@@ -18,8 +18,8 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 # =========================
 app = Flask(__name__)
 
-CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
-CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
